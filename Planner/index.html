@@ -1,0 +1,566 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Portfolio Planner | Chesapeake Systems</title>
+  <meta name="description" content="Plan resources. Control costs. Deliver with confidence.">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📊</text></svg>">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+  <style>
+    *{margin:0;padding:0;box-sizing:border-box}
+    body{font-family:'Inter',-apple-system,sans-serif;background:#0a0a0a;color:#fff;min-height:100vh}
+    .loading{display:flex;align-items:center;justify-content:center;min-height:100vh;flex-direction:column;gap:16px}
+    .spinner{width:40px;height:40px;border:3px solid #222;border-top-color:#fff;border-radius:50%;animation:spin 1s linear infinite}
+    @keyframes spin{to{transform:rotate(360deg)}}
+    ::-webkit-scrollbar{width:8px;height:8px}
+    ::-webkit-scrollbar-track{background:#111}
+    ::-webkit-scrollbar-thumb{background:#333;border-radius:4px}
+    input:focus,select:focus,button:focus{outline:2px solid #fff;outline-offset:2px}
+  </style>
+</head>
+<body>
+<div id="root"><div class="loading"><div class="spinner"></div><span style="color:#666">Loading...</span></div></div>
+<script type="text/babel">
+// ========== CONFIGURATION ==========
+// REPLACE THESE WITH YOUR SUPABASE CREDENTIALS
+const SUPABASE_URL = 'https://lzmstiaexrelqviksdjt.supabase.co';
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imx6bXN0aWFleHJlbHF2aWtzZGp0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njg1OTA3MDAsImV4cCI6MjA4NDE2NjcwMH0.Ys-BX1yVk-31xQg5hUsyBxvFTHPyaocbOsuUvXXxf-k';
+
+const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+// ========== CONSTANTS ==========
+const C = {bg:'#0a0a0a',card:'#111',border:'#222',borderL:'#333',text:'#fff',textS:'#888',textM:'#666',capex:'#3b82f6',opex:'#ec4899',fte:'#22c55e',con:'#f97316',err:'#ef4444',ok:'#22c55e'};
+const RESOURCE_TYPES = [{id:'developer',name:'Developer',color:'#3B82F6',rate:150},{id:'designer',name:'Designer',color:'#EC4899',rate:125},{id:'pm',name:'Project Manager',color:'#10B981',rate:130},{id:'analyst',name:'Analyst',color:'#F59E0B',rate:110},{id:'qa',name:'QA Engineer',color:'#8B5CF6',rate:100},{id:'devops',name:'DevOps',color:'#EF4444',rate:140},{id:'architect',name:'Architect',color:'#06b6d4',rate:175}];
+const COST_CATS = [{id:'software',name:'Software & Licensing',ct:'capex',tm:'lump'},{id:'hardware',name:'Hardware',ct:'capex',tm:'lump'},{id:'cloud',name:'Cloud & Hosting',ct:'opex',tm:'recurring'},{id:'training',name:'Training',ct:'capex',tm:'lump'},{id:'travel',name:'Travel',ct:'opex',tm:'lump'},{id:'migration',name:'Data Migration',ct:'capex',tm:'lump'},{id:'security',name:'Security & Compliance',ct:'opex',tm:'lump'},{id:'maintenance',name:'Maintenance & Support',ct:'opex',tm:'recurring'},{id:'contingency',name:'Contingency',ct:'capex',tm:'lump'},{id:'other',name:'Other',ct:'opex',tm:'lump'}];
+const FYS = ['FY2024','FY2025','FY2026','FY2027','FY2028'];
+const COLORS = ['#3B82F6','#10B981','#F59E0B','#EF4444','#8B5CF6','#EC4899','#06b6d4','#84cc16'];
+const HPM = 160;
+
+// ========== UTILS ==========
+const fmt = n => new Intl.NumberFormat('en-US',{style:'currency',currency:'USD',minimumFractionDigits:0,maximumFractionDigits:0}).format(n);
+const addM = (d,m) => {const r=new Date(d);r.setMonth(r.getMonth()+m);return r};
+const fmtM = d => d.toLocaleDateString('en-US',{month:'short',year:'numeric'});
+const calcCost = r => r.rate * r.duration_periods * HPM * r.quantity * (r.allocation/100);
+const calcHrs = r => r.duration_periods * HPM * r.quantity * (r.allocation/100);
+
+// ========== HOOKS ==========
+const useWin = () => {
+  const [w,setW] = React.useState(window.innerWidth);
+  React.useEffect(() => {const h=()=>setW(window.innerWidth);window.addEventListener('resize',h);return()=>window.removeEventListener('resize',h)},[]);
+  return {w, mob:w<768, tab:w>=768&&w<1024};
+};
+
+// ========== AUTH CONTEXT ==========
+const AuthCtx = React.createContext(null);
+const AuthProvider = ({children}) => {
+  const [user,setUser] = React.useState(null);
+  const [profile,setProfile] = React.useState(null);
+  const [org,setOrg] = React.useState(null);
+  const [loading,setLoading] = React.useState(true);
+
+  const loadData = async (uid) => {
+    const {data:p} = await supabase.from('profiles').select('*').eq('id',uid).single();
+    setProfile(p);
+    const {data:orgs} = await supabase.from('organizations').select('*').order('created_at');
+    if(orgs?.length) setOrg(orgs[0]);
+    setLoading(false);
+  };
+
+  React.useEffect(() => {
+    supabase.auth.getSession().then(({data:{session}}) => {
+      setUser(session?.user ?? null);
+      if(session?.user) loadData(session.user.id);
+      else setLoading(false);
+    });
+    const {data:{subscription}} = supabase.auth.onAuthStateChange((e,session) => {
+      setUser(session?.user ?? null);
+      if(session?.user) loadData(session.user.id);
+      else {setProfile(null);setOrg(null);setLoading(false);}
+    });
+    return () => subscription.unsubscribe();
+  },[]);
+
+  const signUp = async (email,pw,name) => {
+    const {error} = await supabase.auth.signUp({email,password:pw,options:{data:{full_name:name}}});
+    if(error) throw error;
+  };
+  const signIn = async (email,pw) => {
+    const {error} = await supabase.auth.signInWithPassword({email,password:pw});
+    if(error) throw error;
+  };
+  const signOut = () => supabase.auth.signOut();
+  const createOrg = async (name) => {
+    const {data,error} = await supabase.from('organizations').insert({name,owner_id:user.id}).select().single();
+    if(error) throw error;
+    setOrg(data);
+    return data;
+  };
+
+  return <AuthCtx.Provider value={{user,profile,org,loading,signUp,signIn,signOut,createOrg,setOrg}}>{children}</AuthCtx.Provider>;
+};
+const useAuth = () => React.useContext(AuthCtx);
+
+// ========== DATA HOOKS ==========
+const useProjects = (orgId) => {
+  const [projects,setProjects] = React.useState([]);
+  const [loading,setLoading] = React.useState(true);
+
+  const fetch = async () => {
+    if(!orgId) return;
+    setLoading(true);
+    const {data} = await supabase.from('projects').select('*,resources(*),vendor_services(*),other_costs(*)').eq('organization_id',orgId).order('created_at');
+    setProjects(data || []);
+    setLoading(false);
+  };
+
+  React.useEffect(() => {fetch()},[orgId]);
+
+  const create = async (p) => {
+    const {data,error} = await supabase.from('projects').insert({...p,organization_id:orgId}).select().single();
+    if(error) throw error;
+    setProjects(prev => [...prev,{...data,resources:[],vendor_services:[],other_costs:[]}]);
+    return data;
+  };
+  const del = async (id) => {
+    await supabase.from('projects').delete().eq('id',id);
+    setProjects(prev => prev.filter(p => p.id !== id));
+  };
+  const addRes = async (pid,r) => {
+    const {data,error} = await supabase.from('resources').insert({...r,project_id:pid}).select().single();
+    if(error) throw error;
+    setProjects(prev => prev.map(p => p.id===pid ? {...p,resources:[...(p.resources||[]),data]} : p));
+  };
+  const delRes = async (pid,rid) => {
+    await supabase.from('resources').delete().eq('id',rid);
+    setProjects(prev => prev.map(p => p.id===pid ? {...p,resources:p.resources.filter(r=>r.id!==rid)} : p));
+  };
+  const addVen = async (pid,v) => {
+    const {data,error} = await supabase.from('vendor_services').insert({...v,project_id:pid}).select().single();
+    if(error) throw error;
+    setProjects(prev => prev.map(p => p.id===pid ? {...p,vendor_services:[...(p.vendor_services||[]),data]} : p));
+  };
+  const delVen = async (pid,vid) => {
+    await supabase.from('vendor_services').delete().eq('id',vid);
+    setProjects(prev => prev.map(p => p.id===pid ? {...p,vendor_services:p.vendor_services.filter(v=>v.id!==vid)} : p));
+  };
+  const addCost = async (pid,c) => {
+    const {data,error} = await supabase.from('other_costs').insert({...c,project_id:pid}).select().single();
+    if(error) throw error;
+    setProjects(prev => prev.map(p => p.id===pid ? {...p,other_costs:[...(p.other_costs||[]),data]} : p));
+  };
+  const delCost = async (pid,cid) => {
+    await supabase.from('other_costs').delete().eq('id',cid);
+    setProjects(prev => prev.map(p => p.id===pid ? {...p,other_costs:p.other_costs.filter(c=>c.id!==cid)} : p));
+  };
+
+  return {projects,loading,create,del,addRes,delRes,addVen,delVen,addCost,delCost,refresh:fetch};
+};
+
+// ========== UI COMPONENTS ==========
+const Modal = ({open,onClose,title,children}) => {
+  if(!open) return null;
+  return <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.9)',display:'flex',alignItems:'center',justifyContent:'center',zIndex:1000,padding:16}} onClick={onClose}>
+    <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,width:'100%',maxWidth:500,maxHeight:'90vh',overflow:'auto'}} onClick={e=>e.stopPropagation()}>
+      <div style={{padding:'20px 24px',borderBottom:`1px solid ${C.border}`,display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+        <h3 style={{margin:0,fontSize:18,fontWeight:600}}>{title}</h3>
+        <button onClick={onClose} style={{background:'transparent',border:'none',color:C.textS,fontSize:24,cursor:'pointer'}}>×</button>
+      </div>
+      <div style={{padding:24}}>{children}</div>
+    </div>
+  </div>;
+};
+
+const Btn = ({children,onClick,v='primary',disabled,style,...p}) => {
+  const styles = {primary:{background:C.text,color:C.bg,border:'none'},secondary:{background:'transparent',color:C.text,border:`1px solid ${C.border}`}};
+  return <button onClick={onClick} disabled={disabled} style={{padding:'12px 24px',borderRadius:6,fontSize:14,fontWeight:600,cursor:disabled?'not-allowed':'pointer',opacity:disabled?.5:1,...styles[v],...style}} {...p}>{children}</button>;
+};
+
+const Input = ({label,...p}) => <div style={{marginBottom:16}}>
+  {label && <label style={{fontSize:12,color:C.textM,marginBottom:6,display:'block',textTransform:'uppercase',letterSpacing:.5}}>{label}</label>}
+  <input {...p} style={{width:'100%',padding:12,background:C.bg,border:`1px solid ${C.border}`,borderRadius:6,color:C.text,fontSize:14,...p.style}} />
+</div>;
+
+const Select = ({label,children,...p}) => <div style={{marginBottom:16}}>
+  {label && <label style={{fontSize:12,color:C.textM,marginBottom:6,display:'block',textTransform:'uppercase',letterSpacing:.5}}>{label}</label>}
+  <select {...p} style={{width:'100%',padding:12,background:C.bg,border:`1px solid ${C.border}`,borderRadius:6,color:C.text,fontSize:14,...p.style}}>{children}</select>
+</div>;
+
+// ========== LANDING PAGE ==========
+const Landing = ({onStart}) => {
+  const {mob} = useWin();
+  return <div style={{minHeight:'100vh',background:C.bg}}>
+    <nav style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:mob?'16px 20px':'20px 48px',borderBottom:`1px solid ${C.border}`}}>
+      <div style={{display:'flex',alignItems:'center',gap:8}}>
+        <span style={{fontSize:mob?16:20,fontWeight:600}}>Portfolio Planner</span>
+        {!mob && <span style={{fontSize:12,color:C.textM,padding:'4px 8px',border:`1px solid ${C.border}`,borderRadius:4}}>by Chesapeake Systems</span>}
+      </div>
+      <Btn onClick={onStart}>Sign In</Btn>
+    </nav>
+    <section style={{padding:mob?'60px 20px':'100px 48px',textAlign:'center',maxWidth:900,margin:'0 auto'}}>
+      <h1 style={{fontSize:mob?32:52,fontWeight:600,lineHeight:1.15,marginBottom:24,letterSpacing:-1}}>Plan resources. Control costs.<br/>Deliver with confidence.</h1>
+      <p style={{fontSize:mob?16:18,color:C.textS,maxWidth:700,margin:'0 auto 48px',lineHeight:1.7}}>Complete visibility into project costs, FTE and consultant time allocation, CAPEX and OPEX—for one project or an entire portfolio.</p>
+      <Btn onClick={onStart} style={{padding:'16px 40px',fontSize:16}}>Start Free Trial</Btn>
+      <p style={{fontSize:14,color:C.textM,marginTop:16}}>14-day free trial · No credit card required</p>
+    </section>
+    <section style={{padding:mob?'60px 20px':'80px 48px',borderTop:`1px solid ${C.border}`}}>
+      <div style={{maxWidth:900,margin:'0 auto'}}>
+        <h2 style={{fontSize:mob?28:36,fontWeight:600,textAlign:'center',marginBottom:48}}>How it works</h2>
+        <div style={{display:'grid',gridTemplateColumns:mob?'1fr':'repeat(4,1fr)',gap:24}}>
+          {[{s:'01',t:'Set timeframe',d:'Weekly or monthly view'},{s:'02',t:'Add resources',d:'FTE/consultant, rates, CAPEX/OPEX'},{s:'03',t:'Add other costs',d:'Software, hardware, vendors'},{s:'04',t:'Generate reports',d:'Export for approvals'}].map((i,k)=>
+            <div key={k}><div style={{fontSize:12,color:C.textM,marginBottom:8,fontFamily:'monospace'}}>{i.s}</div><h3 style={{fontSize:16,fontWeight:600,marginBottom:8}}>{i.t}</h3><p style={{fontSize:14,color:C.textS,lineHeight:1.5}}>{i.d}</p></div>
+          )}
+        </div>
+      </div>
+    </section>
+    <footer style={{padding:'40px 20px',borderTop:`1px solid ${C.border}`,textAlign:'center'}}><div style={{color:C.textM,fontSize:14}}>© 2025 Chesapeake Systems</div></footer>
+  </div>;
+};
+
+// ========== AUTH PAGE ==========
+const AuthPage = ({onBack}) => {
+  const {signIn,signUp} = useAuth();
+  const [mode,setMode] = React.useState('signin');
+  const [email,setEmail] = React.useState('');
+  const [pw,setPw] = React.useState('');
+  const [name,setName] = React.useState('');
+  const [err,setErr] = React.useState('');
+  const [ok,setOk] = React.useState('');
+  const [loading,setLoading] = React.useState(false);
+
+  const submit = async (e) => {
+    e.preventDefault();
+    setErr('');setOk('');setLoading(true);
+    try {
+      if(mode==='signup') {await signUp(email,pw,name);setOk('Account created! Check email for confirmation.');}
+      else await signIn(email,pw);
+    } catch(e) {setErr(e.message);}
+    setLoading(false);
+  };
+
+  return <div style={{minHeight:'100vh',background:C.bg,display:'flex',alignItems:'center',justifyContent:'center',padding:20}}>
+    <div style={{width:'100%',maxWidth:400}}>
+      <div style={{textAlign:'center',marginBottom:32}}>
+        <h1 style={{fontSize:24,fontWeight:600,marginBottom:8}}>Portfolio Planner</h1>
+        <p style={{color:C.textS,fontSize:14}}>{mode==='signin'?'Sign in to your account':'Create your account'}</p>
+      </div>
+      <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,padding:32}}>
+        {err && <div style={{background:`${C.err}20`,border:`1px solid ${C.err}`,borderRadius:6,padding:12,marginBottom:16,fontSize:14,color:C.err}}>{err}</div>}
+        {ok && <div style={{background:`${C.ok}20`,border:`1px solid ${C.ok}`,borderRadius:6,padding:12,marginBottom:16,fontSize:14,color:C.ok}}>{ok}</div>}
+        <form onSubmit={submit}>
+          {mode==='signup' && <Input label="Full Name" value={name} onChange={e=>setName(e.target.value)} placeholder="John Smith" required />}
+          <Input label="Email" type="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="you@company.com" required />
+          <Input label="Password" type="password" value={pw} onChange={e=>setPw(e.target.value)} placeholder="••••••••" required minLength={6} />
+          <Btn type="submit" disabled={loading} style={{width:'100%',marginTop:8}}>{loading?'Loading...':mode==='signin'?'Sign In':'Create Account'}</Btn>
+        </form>
+        <div style={{marginTop:24,textAlign:'center'}}>
+          <p style={{color:C.textS,fontSize:14}}>{mode==='signin'?"Don't have an account? ":"Already have an account? "}
+            <button onClick={()=>{setMode(mode==='signin'?'signup':'signin');setErr('');setOk('');}} style={{background:'none',border:'none',color:C.text,textDecoration:'underline',cursor:'pointer',fontSize:14}}>{mode==='signin'?'Sign up':'Sign in'}</button>
+          </p>
+        </div>
+      </div>
+      <div style={{textAlign:'center',marginTop:24}}><button onClick={onBack} style={{background:'none',border:'none',color:C.textM,cursor:'pointer',fontSize:14}}>← Back to home</button></div>
+    </div>
+  </div>;
+};
+
+// ========== ONBOARDING ==========
+const Onboarding = () => {
+  const {createOrg,profile} = useAuth();
+  const [name,setName] = React.useState('');
+  const [loading,setLoading] = React.useState(false);
+  const [err,setErr] = React.useState('');
+
+  const submit = async (e) => {
+    e.preventDefault();
+    if(!name.trim()) return;
+    setLoading(true);setErr('');
+    try {await createOrg(name.trim());} catch(e) {setErr(e.message);setLoading(false);}
+  };
+
+  return <div style={{minHeight:'100vh',background:C.bg,display:'flex',alignItems:'center',justifyContent:'center',padding:20}}>
+    <div style={{width:'100%',maxWidth:400,textAlign:'center'}}>
+      <h1 style={{fontSize:24,fontWeight:600,marginBottom:8}}>Welcome{profile?.full_name?`, ${profile.full_name}`:''}!</h1>
+      <p style={{color:C.textS,fontSize:14,marginBottom:32}}>Let's set up your organization.</p>
+      <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,padding:32,textAlign:'left'}}>
+        {err && <div style={{background:`${C.err}20`,border:`1px solid ${C.err}`,borderRadius:6,padding:12,marginBottom:16,fontSize:14,color:C.err}}>{err}</div>}
+        <form onSubmit={submit}>
+          <Input label="Organization Name" value={name} onChange={e=>setName(e.target.value)} placeholder="Acme Healthcare" required />
+          <Btn type="submit" disabled={loading||!name.trim()} style={{width:'100%'}}>{loading?'Creating...':'Create Organization'}</Btn>
+        </form>
+      </div>
+    </div>
+  </div>;
+};
+
+// ========== MAIN APP ==========
+const MainApp = () => {
+  const {user,profile,org,signOut} = useAuth();
+  const {mob,tab} = useWin();
+  const {projects,loading:pLoading,create,del,addRes,delRes,addVen,delVen,addCost,delCost} = useProjects(org?.id);
+
+  const [activePid,setActivePid] = React.useState(null);
+  const [view,setView] = React.useState('planner');
+  const [viewMode,setViewMode] = React.useState('month');
+  const [periods,setPeriods] = React.useState(12);
+  const [showAll,setShowAll] = React.useState(false);
+  
+  const [modal,setModal] = React.useState(null);
+  const [saving,setSaving] = React.useState(false);
+  const [mobileMenu,setMobileMenu] = React.useState(false);
+
+  // Form states
+  const [newProj,setNewProj] = React.useState({name:'',fy:'FY2025'});
+  const [newRes,setNewRes] = React.useState({type_id:'developer',name:'',rate:150,quantity:1,duration_periods:3,allocation:100,employment_type:'fte',cost_type:'capex',start_period:0});
+  const [newVen,setNewVen] = React.useState({vendor:'',description:'',contract_type:'fixed',amount:0,cost_type:'capex',timing:'lump',duration:12});
+  const [newCost,setNewCost] = React.useState({category:'software',name:'',vendor:'',amount:0,cost_type:'capex',timing:'lump',frequency:'annual',duration:1});
+
+  React.useEffect(() => {if(projects.length && !activePid) setActivePid(projects[0].id);},[projects]);
+
+  const activeP = projects.find(p => p.id === activePid);
+
+  const getTotals = (p) => {
+    if(!p) return {fte:0,con:0,ven:0,oth:0,tot:0,capex:0,opex:0,fteH:0,conH:0};
+    const res = p.resources || [];
+    const vens = p.vendor_services || [];
+    const oths = p.other_costs || [];
+    const fteR = res.filter(r=>r.employment_type==='fte');
+    const conR = res.filter(r=>r.employment_type==='consultant');
+    const fte = fteR.reduce((s,r)=>s+calcCost(r),0);
+    const con = conR.reduce((s,r)=>s+calcCost(r),0);
+    const ven = vens.reduce((s,v)=>s+(v.timing==='recurring'?v.amount*v.duration:v.amount),0);
+    const oth = oths.reduce((s,c)=>s+(c.timing==='recurring'?c.amount*c.duration:c.amount),0);
+    const items = [...fteR.map(r=>({ct:r.cost_type,a:calcCost(r)})),...conR.map(r=>({ct:r.cost_type,a:calcCost(r)})),...vens.map(v=>({ct:v.cost_type,a:v.timing==='recurring'?v.amount*v.duration:v.amount})),...oths.map(c=>({ct:c.cost_type,a:c.timing==='recurring'?c.amount*c.duration:c.amount}))];
+    const capex = items.filter(i=>i.ct==='capex').reduce((s,i)=>s+i.a,0);
+    const opex = items.filter(i=>i.ct==='opex').reduce((s,i)=>s+i.a,0);
+    return {fte,con,ven,oth,tot:fte+con+ven+oth,capex,opex,fteH:fteR.reduce((s,r)=>s+calcHrs(r),0),conH:conR.reduce((s,r)=>s+calcHrs(r),0)};
+  };
+
+  const totals = showAll ? projects.reduce((a,p)=>{const t=getTotals(p);return Object.keys(a).reduce((x,k)=>({...x,[k]:a[k]+t[k]}),{})},{fte:0,con:0,ven:0,oth:0,tot:0,capex:0,opex:0,fteH:0,conH:0}) : getTotals(activeP);
+
+  const handleCreateProj = async () => {
+    if(!newProj.name.trim()) return;
+    setSaving(true);
+    try {
+      const p = await create({name:newProj.name.trim(),fiscal_year:newProj.fy,color:COLORS[projects.length%COLORS.length],start_date:new Date().toISOString().split('T')[0],created_by:user.id});
+      setActivePid(p.id);setShowAll(false);setModal(null);setNewProj({name:'',fy:'FY2025'});
+    } catch(e) {alert(e.message);}
+    setSaving(false);
+  };
+
+  const handleAddRes = async () => {
+    if(!activeP || !newRes.name.trim()) return;
+    setSaving(true);
+    try {await addRes(activeP.id,newRes);setModal(null);setNewRes({type_id:'developer',name:'',rate:150,quantity:1,duration_periods:3,allocation:100,employment_type:'fte',cost_type:'capex',start_period:0});} catch(e) {alert(e.message);}
+    setSaving(false);
+  };
+
+  const handleAddVen = async () => {
+    if(!activeP || !newVen.vendor.trim()) return;
+    setSaving(true);
+    try {await addVen(activeP.id,newVen);setModal(null);setNewVen({vendor:'',description:'',contract_type:'fixed',amount:0,cost_type:'capex',timing:'lump',duration:12});} catch(e) {alert(e.message);}
+    setSaving(false);
+  };
+
+  const handleAddCost = async () => {
+    if(!activeP || !newCost.name.trim()) return;
+    setSaving(true);
+    try {await addCost(activeP.id,newCost);setModal(null);setNewCost({category:'software',name:'',vendor:'',amount:0,cost_type:'capex',timing:'lump',frequency:'annual',duration:1});} catch(e) {alert(e.message);}
+    setSaving(false);
+  };
+
+  const exportCSV = () => {
+    const rows = [['Category','Amount'],['FTE Labor',totals.fte],['Professional Services',totals.con],['Vendor Services',totals.ven],['Other Costs',totals.oth],['TOTAL',totals.tot],[],['CAPEX',totals.capex],['OPEX',totals.opex]];
+    const blob = new Blob([rows.map(r=>r.join(',')).join('\n')],{type:'text/csv'});
+    const a = document.createElement('a');a.href=URL.createObjectURL(blob);a.download=`budget_${new Date().toISOString().split('T')[0]}.csv`;a.click();
+  };
+
+  const pArr = Array.from({length:periods},(_,i)=>i);
+  const startD = activeP?.start_date ? new Date(activeP.start_date) : new Date();
+  const getD = i => addM(startD,i);
+
+  if(pLoading) return <div className="loading"><div className="spinner"></div><span style={{color:'#666'}}>Loading projects...</span></div>;
+
+  return <div style={{minHeight:'100vh',background:C.bg}}>
+    {/* Modals */}
+    <Modal open={modal==='report'} onClose={()=>setModal(null)} title="Budget Report">
+      <div style={{marginBottom:24}}>
+        <h4 style={{fontSize:14,color:C.textM,marginBottom:16,textTransform:'uppercase'}}>Summary</h4>
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
+          {[{l:'Total',v:totals.tot,c:C.text},{l:'CAPEX',v:totals.capex,c:C.capex},{l:'OPEX',v:totals.opex,c:C.opex},{l:'FTE Hours',v:`${totals.fteH.toLocaleString()}h`,c:C.fte}].map((i,k)=>
+            <div key={k} style={{background:C.bg,padding:12,borderRadius:6}}><div style={{fontSize:11,color:C.textM,marginBottom:4,textTransform:'uppercase'}}>{i.l}</div><div style={{fontSize:18,fontWeight:600,color:i.c}}>{typeof i.v==='number'?fmt(i.v):i.v}</div></div>
+          )}
+        </div>
+      </div>
+      <Btn onClick={exportCSV} style={{width:'100%'}}>Export CSV</Btn>
+    </Modal>
+
+    <Modal open={modal==='newProj'} onClose={()=>setModal(null)} title="New Project">
+      <Input label="Project Name" value={newProj.name} onChange={e=>setNewProj({...newProj,name:e.target.value})} placeholder="Project name" />
+      <Select label="Fiscal Year" value={newProj.fy} onChange={e=>setNewProj({...newProj,fy:e.target.value})}>{FYS.map(f=><option key={f} value={f}>{f}</option>)}</Select>
+      <Btn onClick={handleCreateProj} disabled={saving||!newProj.name.trim()} style={{width:'100%'}}>{saving?'Creating...':'Create Project'}</Btn>
+    </Modal>
+
+    <Modal open={modal==='addRes'} onClose={()=>setModal(null)} title="Add Resource">
+      <Select label="Type" value={newRes.type_id} onChange={e=>{const t=RESOURCE_TYPES.find(r=>r.id===e.target.value);setNewRes({...newRes,type_id:e.target.value,rate:t?.rate||150})}}>{RESOURCE_TYPES.map(t=><option key={t.id} value={t.id}>{t.name}</option>)}</Select>
+      <Input label="Name" value={newRes.name} onChange={e=>setNewRes({...newRes,name:e.target.value})} placeholder="Senior Developer" />
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}><Input label="Rate/hr" type="number" value={newRes.rate} onChange={e=>setNewRes({...newRes,rate:+e.target.value})} /><Input label="Qty" type="number" value={newRes.quantity} onChange={e=>setNewRes({...newRes,quantity:+e.target.value})} /></div>
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}><Input label="Duration (mo)" type="number" value={newRes.duration_periods} onChange={e=>setNewRes({...newRes,duration_periods:+e.target.value})} /><Select label="Allocation" value={newRes.allocation} onChange={e=>setNewRes({...newRes,allocation:+e.target.value})}><option value={100}>100%</option><option value={75}>75%</option><option value={50}>50%</option><option value={25}>25%</option></Select></div>
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}><Select label="Employment" value={newRes.employment_type} onChange={e=>setNewRes({...newRes,employment_type:e.target.value})}><option value="fte">FTE</option><option value="consultant">Consultant</option></Select><Select label="Cost Type" value={newRes.cost_type} onChange={e=>setNewRes({...newRes,cost_type:e.target.value})}><option value="capex">CAPEX</option><option value="opex">OPEX</option></Select></div>
+      <div style={{background:C.bg,padding:12,borderRadius:6,marginBottom:16,textAlign:'center'}}><span style={{fontSize:12,color:C.textM}}>Est: </span><span style={{fontSize:18,fontWeight:600}}>{fmt(newRes.rate*newRes.duration_periods*HPM*newRes.quantity*(newRes.allocation/100))}</span></div>
+      <Btn onClick={handleAddRes} disabled={saving||!newRes.name.trim()} style={{width:'100%'}}>{saving?'Adding...':'Add Resource'}</Btn>
+    </Modal>
+
+    <Modal open={modal==='addVen'} onClose={()=>setModal(null)} title="Add Vendor Service">
+      <Input label="Vendor" value={newVen.vendor} onChange={e=>setNewVen({...newVen,vendor:e.target.value})} placeholder="Deloitte" />
+      <Input label="Description" value={newVen.description} onChange={e=>setNewVen({...newVen,description:e.target.value})} placeholder="Implementation" />
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}><Select label="Contract" value={newVen.contract_type} onChange={e=>setNewVen({...newVen,contract_type:e.target.value})}><option value="fixed">Fixed</option><option value="tm">T&M</option><option value="hybrid">Hybrid</option></Select><Select label="Cost Type" value={newVen.cost_type} onChange={e=>setNewVen({...newVen,cost_type:e.target.value})}><option value="capex">CAPEX</option><option value="opex">OPEX</option></Select></div>
+      <Select label="Timing" value={newVen.timing} onChange={e=>setNewVen({...newVen,timing:e.target.value})}><option value="lump">Lump Sum</option><option value="recurring">Recurring</option></Select>
+      {newVen.timing==='recurring'?<div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}><Input label="$/mo" type="number" value={newVen.amount} onChange={e=>setNewVen({...newVen,amount:+e.target.value})} /><Input label="Months" type="number" value={newVen.duration} onChange={e=>setNewVen({...newVen,duration:+e.target.value})} /></div>:<Input label="Amount" type="number" value={newVen.amount} onChange={e=>setNewVen({...newVen,amount:+e.target.value})} />}
+      <div style={{background:C.bg,padding:12,borderRadius:6,marginBottom:16,textAlign:'center'}}><span style={{fontSize:12,color:C.textM}}>Total: </span><span style={{fontSize:18,fontWeight:600}}>{fmt(newVen.timing==='recurring'?newVen.amount*newVen.duration:newVen.amount)}</span></div>
+      <Btn onClick={handleAddVen} disabled={saving||!newVen.vendor.trim()} style={{width:'100%'}}>{saving?'Adding...':'Add Vendor'}</Btn>
+    </Modal>
+
+    <Modal open={modal==='addCost'} onClose={()=>setModal(null)} title="Add Other Cost">
+      <Select label="Category" value={newCost.category} onChange={e=>{const c=COST_CATS.find(x=>x.id===e.target.value);setNewCost({...newCost,category:e.target.value,cost_type:c?.ct||'opex',timing:c?.tm||'lump'})}}>{COST_CATS.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</Select>
+      <Input label="Name" value={newCost.name} onChange={e=>setNewCost({...newCost,name:e.target.value})} placeholder="Azure Hosting" />
+      <Input label="Vendor (opt)" value={newCost.vendor} onChange={e=>setNewCost({...newCost,vendor:e.target.value})} placeholder="Microsoft" />
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}><Select label="Cost Type" value={newCost.cost_type} onChange={e=>setNewCost({...newCost,cost_type:e.target.value})}><option value="capex">CAPEX</option><option value="opex">OPEX</option></Select><Select label="Timing" value={newCost.timing} onChange={e=>setNewCost({...newCost,timing:e.target.value})}><option value="lump">Lump Sum</option><option value="recurring">Recurring</option></Select></div>
+      {newCost.timing==='recurring'?<div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:12}}><Input label="Amt" type="number" value={newCost.amount} onChange={e=>setNewCost({...newCost,amount:+e.target.value})} /><Select label="Freq" value={newCost.frequency} onChange={e=>setNewCost({...newCost,frequency:e.target.value})}><option value="monthly">Monthly</option><option value="quarterly">Quarterly</option><option value="annual">Annual</option></Select><Input label="#" type="number" value={newCost.duration} onChange={e=>setNewCost({...newCost,duration:+e.target.value})} /></div>:<Input label="Amount" type="number" value={newCost.amount} onChange={e=>setNewCost({...newCost,amount:+e.target.value})} />}
+      <div style={{background:C.bg,padding:12,borderRadius:6,marginBottom:16,textAlign:'center'}}><span style={{fontSize:12,color:C.textM}}>Total: </span><span style={{fontSize:18,fontWeight:600}}>{fmt(newCost.timing==='recurring'?newCost.amount*newCost.duration:newCost.amount)}</span></div>
+      <Btn onClick={handleAddCost} disabled={saving||!newCost.name.trim()} style={{width:'100%'}}>{saving?'Adding...':'Add Cost'}</Btn>
+    </Modal>
+
+    {/* Nav */}
+    <nav style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:mob?'12px 16px':'16px 32px',borderBottom:`1px solid ${C.border}`}}>
+      <div style={{display:'flex',alignItems:'center',gap:8}}>
+        <span style={{fontSize:mob?16:18,fontWeight:600}}>Portfolio Planner</span>
+        {!mob && org && <span style={{fontSize:12,color:C.textM,padding:'4px 8px',background:C.card,borderRadius:4}}>{org.name}</span>}
+      </div>
+      {mob ? <button onClick={()=>setMobileMenu(!mobileMenu)} style={{background:'transparent',border:'none',color:C.text,fontSize:24,cursor:'pointer'}}>☰</button> : (
+        <div style={{display:'flex',alignItems:'center',gap:12}}>
+          <Btn v="secondary" onClick={()=>setModal('report')} style={{padding:'8px 16px'}}>Report</Btn>
+          <span style={{fontSize:13,color:C.textS}}>{profile?.email}</span>
+          <Btn v="secondary" onClick={signOut} style={{padding:'8px 16px'}}>Sign Out</Btn>
+        </div>
+      )}
+    </nav>
+
+    {mob && mobileMenu && <div style={{padding:16,borderBottom:`1px solid ${C.border}`,background:C.card}}>
+      <Btn v="secondary" onClick={()=>{setModal('report');setMobileMenu(false)}} style={{width:'100%',marginBottom:8}}>Report</Btn>
+      <Btn v="secondary" onClick={signOut} style={{width:'100%'}}>Sign Out</Btn>
+    </div>}
+
+    {/* Main */}
+    <div style={{padding:mob?16:'24px 32px'}}>
+      {/* Project Tabs */}
+      <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:16,flexWrap:'wrap'}}>
+        <button onClick={()=>setShowAll(!showAll)} style={{padding:'8px 12px',border:showAll?`1px solid ${C.text}`:`1px solid ${C.border}`,borderRadius:6,background:showAll?'rgba(255,255,255,.1)':'transparent',color:showAll?C.text:C.textS,cursor:'pointer',fontSize:12,fontWeight:500}}>Portfolio</button>
+        {projects.map(p=><button key={p.id} onClick={()=>{setActivePid(p.id);setShowAll(false)}} style={{padding:'8px 12px',border:!showAll&&activePid===p.id?`1px solid ${p.color}`:`1px solid ${C.border}`,borderRadius:6,background:!showAll&&activePid===p.id?`${p.color}20`:'transparent',color:!showAll&&activePid===p.id?p.color:C.textS,cursor:'pointer',fontSize:12,fontWeight:500,display:'flex',alignItems:'center',gap:6}}><div style={{width:8,height:8,borderRadius:2,background:p.color}}/>{mob?p.name.slice(0,10):p.name}</button>)}
+        <button onClick={()=>setModal('newProj')} style={{padding:'8px 12px',border:`1px dashed ${C.borderL}`,borderRadius:6,background:'transparent',color:C.textM,cursor:'pointer',fontSize:12}}>+ New</button>
+      </div>
+
+      {/* View Toggle */}
+      {!showAll && activeP && <div style={{display:'flex',gap:8,marginBottom:16}}>
+        <button onClick={()=>setView('planner')} style={{padding:'10px 16px',border:view==='planner'?`1px solid ${C.text}`:`1px solid ${C.border}`,borderRadius:6,background:view==='planner'?'rgba(255,255,255,.1)':'transparent',color:view==='planner'?C.text:C.textS,cursor:'pointer',fontSize:13,fontWeight:500}}>📅 Planner</button>
+        <button onClick={()=>setView('budget')} style={{padding:'10px 16px',border:view==='budget'?`1px solid ${C.text}`:`1px solid ${C.border}`,borderRadius:6,background:view==='budget'?'rgba(255,255,255,.1)':'transparent',color:view==='budget'?C.text:C.textS,cursor:'pointer',fontSize:13,fontWeight:500}}>💰 Full Budget</button>
+      </div>}
+
+      {/* Dashboard */}
+      <div style={{display:'grid',gridTemplateColumns:mob?'repeat(2,1fr)':tab?'repeat(3,1fr)':'repeat(5,1fr)',gap:12,marginBottom:20}}>
+        {[{l:'Total',v:fmt(totals.tot),c:C.text},{l:'CAPEX',v:fmt(totals.capex),c:C.capex},{l:'OPEX',v:fmt(totals.opex),c:C.opex},{l:'FTE Hours',v:`${totals.fteH.toLocaleString()}h`,c:C.fte},{l:'Consultant',v:`${totals.conH.toLocaleString()}h`,c:C.con}].map((d,i)=>
+          <div key={i} style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:8,padding:12}}><div style={{fontSize:10,color:C.textM,marginBottom:4,textTransform:'uppercase',letterSpacing:.5}}>{d.l}</div><div style={{fontSize:mob?16:20,fontWeight:600,color:d.c}}>{d.v}</div></div>
+        )}
+      </div>
+
+      {/* Planner View */}
+      {(showAll || view==='planner') && <>
+        <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:16,padding:12,background:C.card,borderRadius:8,border:`1px solid ${C.border}`,flexWrap:'wrap'}}>
+          <div style={{display:'flex',background:C.bg,borderRadius:6,padding:2}}>
+            {['week','month'].map(m=><button key={m} onClick={()=>setViewMode(m)} style={{padding:'6px 12px',border:'none',borderRadius:4,background:viewMode===m?C.borderL:'transparent',color:viewMode===m?C.text:C.textM,cursor:'pointer',fontSize:12}}>{m==='week'?'Weeks':'Months'}</button>)}
+          </div>
+          <div style={{display:'flex',alignItems:'center',gap:8}}>
+            <button onClick={()=>setPeriods(p=>Math.max(4,p-2))} style={{width:28,height:28,border:`1px solid ${C.border}`,borderRadius:6,background:C.bg,color:C.text,cursor:'pointer'}}>−</button>
+            <span style={{fontSize:13,minWidth:24,textAlign:'center'}}>{periods}</span>
+            <button onClick={()=>setPeriods(p=>Math.min(52,p+2))} style={{width:28,height:28,border:`1px solid ${C.border}`,borderRadius:6,background:C.bg,color:C.text,cursor:'pointer'}}>+</button>
+          </div>
+        </div>
+
+        {!showAll && activeP && <button onClick={()=>setModal('addRes')} style={{marginBottom:16,padding:'10px 16px',background:'transparent',border:`1px solid ${C.border}`,borderRadius:6,color:C.text,fontSize:13,cursor:'pointer'}}>+ Add Resource</button>}
+
+        <div style={{background:C.card,borderRadius:8,border:`1px solid ${C.border}`,overflow:'hidden',overflowX:'auto'}}>
+          <div style={{minWidth:mob?800:'auto'}}>
+            <div style={{display:'grid',gridTemplateColumns:`repeat(${periods},1fr)`,borderBottom:`1px solid ${C.border}`}}>
+              {pArr.map((p,i)=><div key={p} style={{padding:'8px 4px',textAlign:'center',fontSize:10,color:C.textM,borderRight:i<pArr.length-1?`1px solid ${C.border}`:'none'}}>{fmtM(getD(p))}</div>)}
+            </div>
+            <div style={{position:'relative',minHeight:Math.max(150,(showAll?projects.flatMap(p=>p.resources||[]).length:(activeP?.resources||[]).length)*52+20),padding:'10px 0'}}>
+              {pArr.map((_,i)=><div key={i} style={{position:'absolute',left:`${(i/periods)*100}%`,top:0,bottom:0,width:1,background:C.border,opacity:.3}}/>)}
+              {(showAll?projects.flatMap(p=>(p.resources||[]).map(r=>({...r,pColor:p.color,pName:p.name}))):(activeP?.resources||[])).map((r,idx)=>{
+                const t=RESOURCE_TYPES.find(x=>x.id===r.type_id);
+                const color=showAll?r.pColor:t?.color||'#888';
+                return <div key={`${r.pName||''}-${r.id}`} style={{position:'absolute',top:`${idx*52+10}px`,left:`${(r.start_period/periods)*100}%`,width:`${(r.duration_periods/periods)*100}%`,height:40,background:`${color}15`,border:`1px solid ${color}`,borderRadius:4,display:'flex',alignItems:'center',padding:'0 10px',justifyContent:'space-between',overflow:'hidden'}}>
+                  <div style={{display:'flex',alignItems:'center',gap:6,overflow:'hidden'}}>
+                    <span style={{fontSize:12,fontWeight:500,color:C.text,whiteSpace:'nowrap'}}>{r.name}</span>
+                    {r.quantity>1 && <span style={{background:color,color:'#fff',fontSize:9,fontWeight:600,padding:'2px 4px',borderRadius:3}}>×{r.quantity}</span>}
+                    <span style={{background:r.employment_type==='fte'?`${C.fte}30`:`${C.con}30`,color:r.employment_type==='fte'?C.fte:C.con,fontSize:9,fontWeight:600,padding:'2px 4px',borderRadius:3}}>{r.employment_type==='fte'?'FTE':'CON'}</span>
+                  </div>
+                  <div style={{display:'flex',alignItems:'center',gap:8}}>
+                    <span style={{fontSize:11,fontWeight:600,color}}>{fmt(calcCost(r))}</span>
+                    {!showAll && <button onClick={()=>delRes(activeP.id,r.id)} style={{background:'transparent',border:'none',color:C.textM,cursor:'pointer',fontSize:14,padding:0}}>×</button>}
+                  </div>
+                </div>;
+              })}
+              {(showAll?projects.flatMap(p=>p.resources||[]).length:(activeP?.resources||[]).length)===0 && <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:150,color:C.textM,fontSize:14}}>Add resources to get started</div>}
+            </div>
+          </div>
+        </div>
+      </>}
+
+      {/* Budget View */}
+      {!showAll && view==='budget' && activeP && <div style={{display:'flex',flexDirection:'column',gap:16}}>
+        {/* FTE */}
+        <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:8,overflow:'hidden'}}>
+          <div style={{padding:16,borderBottom:`1px solid ${C.border}`,display:'flex',justifyContent:'space-between',alignItems:'center'}}><div><span style={{fontWeight:600}}>FTE Labor</span><span style={{marginLeft:8,fontSize:12,color:C.textM}}>from Planner</span></div><span style={{fontWeight:600,color:C.fte}}>{fmt(totals.fte)}</span></div>
+          <div style={{padding:16}}>{(activeP.resources||[]).filter(r=>r.employment_type==='fte').length===0?<p style={{color:C.textM,fontSize:13,margin:0}}>No FTE resources</p>:(activeP.resources||[]).filter(r=>r.employment_type==='fte').map(r=><div key={r.id} style={{display:'flex',justifyContent:'space-between',padding:'8px 0',borderBottom:`1px solid ${C.border}`}}><span style={{fontSize:13}}>{r.name} {r.quantity>1&&`×${r.quantity}`} · {r.allocation}% · {r.duration_periods}mo</span><span style={{fontSize:13,color:C.textS}}>{fmt(calcCost(r))}</span></div>)}</div>
+        </div>
+        {/* Prof Services */}
+        <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:8,overflow:'hidden'}}>
+          <div style={{padding:16,borderBottom:`1px solid ${C.border}`,display:'flex',justifyContent:'space-between',alignItems:'center'}}><div><span style={{fontWeight:600}}>Professional Services</span><span style={{marginLeft:8,fontSize:12,color:C.textM}}>from Planner</span></div><span style={{fontWeight:600,color:C.con}}>{fmt(totals.con)}</span></div>
+          <div style={{padding:16}}>{(activeP.resources||[]).filter(r=>r.employment_type==='consultant').length===0?<p style={{color:C.textM,fontSize:13,margin:0}}>No consultants</p>:(activeP.resources||[]).filter(r=>r.employment_type==='consultant').map(r=><div key={r.id} style={{display:'flex',justifyContent:'space-between',padding:'8px 0',borderBottom:`1px solid ${C.border}`}}><span style={{fontSize:13}}>{r.name} {r.quantity>1&&`×${r.quantity}`} · {r.allocation}% · {r.duration_periods}mo</span><span style={{fontSize:13,color:C.textS}}>{fmt(calcCost(r))}</span></div>)}</div>
+        </div>
+        {/* Vendors */}
+        <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:8,overflow:'hidden'}}>
+          <div style={{padding:16,borderBottom:`1px solid ${C.border}`,display:'flex',justifyContent:'space-between',alignItems:'center'}}><span style={{fontWeight:600}}>Vendor Services</span><div style={{display:'flex',alignItems:'center',gap:12}}><span style={{fontWeight:600,color:'#8b5cf6'}}>{fmt(totals.ven)}</span><button onClick={()=>setModal('addVen')} style={{padding:'6px 12px',background:'transparent',border:`1px solid ${C.border}`,borderRadius:4,color:C.text,fontSize:12,cursor:'pointer'}}>+ Add</button></div></div>
+          <div style={{padding:16}}>{(activeP.vendor_services||[]).length===0?<p style={{color:C.textM,fontSize:13,margin:0}}>No vendors</p>:(activeP.vendor_services||[]).map(v=><div key={v.id} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'10px 0',borderBottom:`1px solid ${C.border}`}}><div><div style={{fontSize:13,fontWeight:500}}>{v.vendor}</div><div style={{fontSize:12,color:C.textM}}>{v.description} · <span style={{color:v.cost_type==='capex'?C.capex:C.opex}}>{v.cost_type.toUpperCase()}</span></div></div><div style={{display:'flex',alignItems:'center',gap:12}}><span style={{fontSize:13,fontWeight:500}}>{fmt(v.timing==='recurring'?v.amount*v.duration:v.amount)}</span><button onClick={()=>delVen(activeP.id,v.id)} style={{background:'transparent',border:'none',color:C.textM,cursor:'pointer',fontSize:16}}>×</button></div></div>)}</div>
+        </div>
+        {/* Other */}
+        <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:8,overflow:'hidden'}}>
+          <div style={{padding:16,borderBottom:`1px solid ${C.border}`,display:'flex',justifyContent:'space-between',alignItems:'center'}}><span style={{fontWeight:600}}>Other Costs</span><div style={{display:'flex',alignItems:'center',gap:12}}><span style={{fontWeight:600}}>{fmt(totals.oth)}</span><button onClick={()=>setModal('addCost')} style={{padding:'6px 12px',background:'transparent',border:`1px solid ${C.border}`,borderRadius:4,color:C.text,fontSize:12,cursor:'pointer'}}>+ Add</button></div></div>
+          <div style={{padding:16}}>{(activeP.other_costs||[]).length===0?<p style={{color:C.textM,fontSize:13,margin:0}}>No other costs</p>:(activeP.other_costs||[]).map(c=>{const cat=COST_CATS.find(x=>x.id===c.category);return <div key={c.id} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'10px 0',borderBottom:`1px solid ${C.border}`}}><div><div style={{fontSize:13,fontWeight:500}}>{c.name}</div><div style={{fontSize:12,color:C.textM}}>{cat?.name} {c.vendor&&`· ${c.vendor}`} · <span style={{color:c.cost_type==='capex'?C.capex:C.opex}}>{c.cost_type.toUpperCase()}</span>{c.timing==='recurring'&&` · ${fmt(c.amount)}/${c.frequency} × ${c.duration}`}</div></div><div style={{display:'flex',alignItems:'center',gap:12}}><span style={{fontSize:13,fontWeight:500}}>{fmt(c.timing==='recurring'?c.amount*c.duration:c.amount)}</span><button onClick={()=>delCost(activeP.id,c.id)} style={{background:'transparent',border:'none',color:C.textM,cursor:'pointer',fontSize:16}}>×</button></div></div>})}</div>
+        </div>
+      </div>}
+    </div>
+  </div>;
+};
+
+// ========== ROOT ==========
+const App = () => {
+  const {user,org,loading} = useAuth();
+  const [page,setPage] = React.useState('landing');
+
+  if(loading) return <div className="loading"><div className="spinner"></div><span style={{color:'#666'}}>Loading...</span></div>;
+  if(user && !org) return <Onboarding />;
+  if(user && org) return <MainApp />;
+  if(page==='auth') return <AuthPage onBack={()=>setPage('landing')} />;
+  return <Landing onStart={()=>setPage('auth')} />;
+};
+
+const Root = () => <AuthProvider><App /></AuthProvider>;
+ReactDOM.createRoot(document.getElementById('root')).render(<Root />);
+</script>
+</body>
+</html>
