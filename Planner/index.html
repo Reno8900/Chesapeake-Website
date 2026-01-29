@@ -86,8 +86,8 @@ const MilestoneBar=({m,periods,onUpd,onEdit})=>{const[drag,setDrag]=React.useSta
 const AuthCtx=React.createContext(null);
 const AuthProvider=({children})=>{
   const[user,setUser]=React.useState(null);const[profile,setProfile]=React.useState(null);const[org,setOrg]=React.useState(null);const[loading,setLoading]=React.useState(true);const[showTutorial,setShowTutorial]=React.useState(false);
-  const loadData=async(uid)=>{const{data:p}=await supabase.from('profiles').select('*').eq('id',uid).single();setProfile(p);const{data:orgs}=await supabase.from('organizations').select('*').order('created_at');if(orgs?.length){setOrg(orgs[0]);if(!localStorage.getItem('pp_tutorial_v7'))setShowTutorial(true)}setLoading(false)};
-  React.useEffect(()=>{supabase.auth.getSession().then(({data:{session}})=>{setUser(session?.user??null);if(session?.user)loadData(session.user.id);else setLoading(false)});const{data:{subscription}}=supabase.auth.onAuthStateChange((e,session)=>{setUser(session?.user??null);if(session?.user)loadData(session.user.id);else{setProfile(null);setOrg(null);setLoading(false)}});return()=>subscription.unsubscribe()},[]);
+  const loadData=async(uid)=>{try{const{data:p}=await supabase.from('profiles').select('*').eq('id',uid).single();setProfile(p);const{data:orgs}=await supabase.from('organizations').select('*').order('created_at');if(orgs?.length){setOrg(orgs[0]);if(!localStorage.getItem('pp_tutorial_v7'))setShowTutorial(true)}}catch(e){console.error('Load error:',e)}finally{setLoading(false)}};
+  React.useEffect(()=>{supabase.auth.getSession().then(({data:{session}})=>{setUser(session?.user??null);if(session?.user)loadData(session.user.id);else setLoading(false)}).catch(e=>{console.error('Session error:',e);setLoading(false)});const{data:{subscription}}=supabase.auth.onAuthStateChange((e,session)=>{setUser(session?.user??null);if(session?.user)loadData(session.user.id);else{setProfile(null);setOrg(null);setLoading(false)}});return()=>subscription.unsubscribe()},[]);
   const signUp=async(email,pw,name)=>{const{error}=await supabase.auth.signUp({email,password:pw,options:{data:{full_name:name},emailRedirectTo:window.location.origin+window.location.pathname}});if(error)throw error};
   const signIn=async(email,pw)=>{const{error}=await supabase.auth.signInWithPassword({email,password:pw});if(error)throw error};
   const signOut=()=>supabase.auth.signOut();
@@ -360,7 +360,7 @@ const MainApp=()=>{
         </div>}
       </>}
     </div>
-  </div>;
+  </>;
 };
 
 const App=()=>{const{user,org,loading}=useAuth();const[page,setPage]=React.useState('landing');const[authMode,setAuthMode]=React.useState('signin');if(loading)return<div className="loading"><div className="spinner"/></div>;if(user&&!org)return<Onboarding/>;if(user&&org)return<MainApp/>;if(page==='auth')return<AuthPage onBack={()=>setPage('landing')} startMode={authMode}/>;return<Landing onStart={()=>{setAuthMode('signin');setPage('auth')}} onSignup={()=>{setAuthMode('signup');setPage('auth')}}/>};
